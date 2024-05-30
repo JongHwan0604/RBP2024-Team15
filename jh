@@ -12,24 +12,24 @@ class DetermineColor(Node):
         self.image_sub = self.create_subscription(Image, '/camera/color/image_raw', self.callback, 10)
         self.color_pub = self.create_publisher(Header, '/rotate_cmd', 10)
         self.bridge = CvBridge()
-        self.tracker = cv2.TrackerKCF_create()  # KCF 트래커 생성
+        self.tracker = cv2.TrackerCSRT_create()  # CSRT 트래커 생성
         self.initBB = None  # 트래킹할 객체의 초기 바운딩 박스
 
     def callback(self, data):
         try:
-            # listen image topic
+            # 이미지 토픽 수신
             image = self.bridge.imgmsg_to_cv2(data, 'bgr8')
 
-            # prepare rotate_cmd msg
+            # 회전 명령 메시지 준비
             msg = Header()
             msg.stamp = data.header.stamp
-            msg.frame_id = '0'  # default: STOP
+            msg.frame_id = '0'  # 기본값: STOP
 
             # 초기 바운딩 박스 설정
             if self.initBB is None:
-                # 여기서 바운딩 박스를 수동으로 설정할 수 있습니다.
                 self.initBB = cv2.selectROI("Frame", image, fromCenter=False, showCrosshair=True)
                 self.tracker.init(image, self.initBB)
+                cv2.destroyWindow("Frame")
 
             # 트래킹 업데이트
             (success, box) = self.tracker.update(image)
@@ -37,6 +37,7 @@ class DetermineColor(Node):
             if success:
                 (x, y, w, h) = [int(v) for v in box]
                 cv2.rectangle(image, (x, y), (x + w, y + h), (0, 255, 0), 2)
+
                 # 트래킹한 영역 내에서 색상 분석
                 roi = image[y:y+h, x:x+w]
                 hsv_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
@@ -46,15 +47,13 @@ class DetermineColor(Node):
 
                 Rtotal, Gtotal, Btotal = 0, 0, 0
 
-                black_indices = np.where(np.all(np.logical_and(lower_black <= hsv_roi, hsv_roi <= upper_black), axis=-1))
-                if len(black_indices[0]) >= 2:
-                    left_black_index = black_indices[1][0]
-                    right_black_index = black_indices[1][-1]
-                    inner_colors = hsv_roi[:, left_black_index:right_black_index]
+                mask_black = cv2.inRange(hsv_roi, lower_black, upper_black)
+                non_black_roi = cv2.bitwise_and(hsv_roi, hsv_roi, mask=~mask_black)
 
-                    Rtotal += np.sum(((inner_colors[:, :, 0] > 170) | (inner_colors[:, :, 0] < 10)))
-                    Gtotal += np.sum(((inner_colors[:, :, 0] > 50) & (inner_colors[:, :, 0] < 70)))
-                    Btotal += np.sum(((inner_colors[:, :, 0] > 110) & (inner_colors[:, :, 0] < 130)))
+                Rtotal += np.sum((non_black_roi[:, :, 0] >= 0) & (non_black_roi[:, :, 0] <= 10))
+                Rtotal += np.sum((non_black_roi[:, :, 0] >= 170) & (non_black_roi[:, :, 0] <= 180))
+                Gtotal += np.sum((non_black_roi[:, :, 0] >= 50) & (non_black_roi[:, :, 0] <= 70))
+                Btotal += np.sum((non_black_roi[:, :, 0] >= 110) & (non_black_roi[:, :, 0] <= 130))
 
                 if Rtotal > Gtotal and Rtotal > Btotal:
                     msg.frame_id = '-1'  # CW
@@ -76,4 +75,5 @@ if __name__ == '__main__':
     rclpy.spin(detector)
     detector.destroy_node()
     rclpy.shutdown()
+
 
