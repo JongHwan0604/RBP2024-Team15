@@ -1,16 +1,17 @@
 import rclpy
+from rclpy.node import Node
 import numpy as np
 import cv2
+from glob import glob
 
-from rclpy.node import Node
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, CompressedImage
 from cv_bridge import CvBridge, CvBridgeError
 from std_msgs.msg import Header
 
 class DetermineColor(Node):
     def __init__(self):
         super().__init__('color_detector')
-        self.image_sub = self.create_subscription(Image, '/camera/color/image_raw', self.callback, 10)
+        self.image_sub = self.create_subscription(Image, '/color', self.callback, 10)
         self.color_pub = self.create_publisher(Header, '/rotate_cmd', 10)
         self.bridge = CvBridge()
 
@@ -22,61 +23,75 @@ class DetermineColor(Node):
             # prepare rotate_cmd msg
             # DO NOT DELETE THE BELOW THREE LINES!
             msg = Header()
-            msg.stamp = data.header.stamp
+            msg = data.header
             msg.frame_id = '0'  # default: STOP
-
+    
             # determine background color
-            try:
-                hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+            # TODO 
+            # determine the color and assing +1, 0, or, -1 for frame_id
+            # msg.frame_id = '+1' # CCW 
+            # msg.frame_id = '0'  # STOP
+            # msg.frame_id = '-1' # CW 
+            
 
-                # lower_black, upper_black is threshold of color black
-                lower_black = np.array([0, 0, 0], dtype=np.uint8)
-                upper_black = np.array([15, 50, 50], dtype=np.uint8)
 
-                Rtotal, Gtotal, Btotal = 0, 0, 0
+    def DetermineColor(filename):
+        img_0 = cv2.imread(filename)    
+    
+    if img_0 is None:
+        return None
 
-                for row_idx, row in enumerate(hsv_image):
-                    # Find the indices of black regions in the row
-                    black_indices = np.where(np.all(np.logical_and(lower_black <= row, row <= upper_black), axis=-1))[0]
+    img_1 = cv2.cvtColor(img_0, cv2.COLOR_BGR2HSV)
 
-                    if len(black_indices) >= 2:
-                        left_black_index = black_indices[0]
-                        right_black_index = black_indices[-1]
+    B=cv2.inRange(img_1, np.array([0,0,0]), np.array([180,255,50]))
+    C,_=cv2.findContours(B, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-                        # 시각화: 검은색 픽셀을 초록색으로 변경
-                        image[row_idx, left_black_index] = [0, 255, 0]
-                        image[row_idx, right_black_index] = [0, 255, 0]
+    def filter_contours(contours):
+        filtered_contours = []
+        for contour in contours:
+            if cv2.contourArea(contour) > 2000:
+                enf = cv2.arcLength(contour, True)
+                rms = cv2.approxPolyDP(contour, 0.02*enf, True)
+            if len(rms) == 4:
+                    filtered_contours.append(contour)
+                return filtered_contours
+    
+    mps = filter_contours(C)
+        
+    if not mps:
+        return None
 
-                        # Extract colors within the boundary
-                        inner_colors = row[left_black_index:right_black_index]
+    CR = {'R': 0, 'G': 0, 'B': 0}
+    for mp in mps:
+        mask = np.zeros(img_1.shape[:2], dtype = np.uint8)
+        cv2.drawContours(mask, [mp], -1, 255, -1)
+        mrh = cv2.bitwise_and(img_1, img_1, mask=mask)
+        
+        rm = cv2.inRange(mrh, (0, 50, 50), (10, 255, 255)) | cv2.inRange(mrh, (170, 50, 50), (180, 255, 255))
+        gm = cv2.inRange(mrh, (50, 50, 50), (70, 255, 255))
+        bm = cv2.inRange(mrh, (110, 50, 50), (130, 255, 255))
+        
+        CR['R'] += cv2.countNonZero(rm)
+        CR['G'] += cv2.countNonZero(gm)
+        CR['B'] += cv2.countNonZero(bm)
+        
+    DC = max(CR, key=CR.get)
+    return DC
 
-                        # Count pixels in the color ranges
-                        Rtotal += np.sum((inner_colors[:, 0] > 170) | (inner_colors[:, 0] < 10))
-                        Gtotal += np.sum((inner_colors[:, 0] > 50) & (inner_colors[:, 0] < 70))
-                        Btotal += np.sum((inner_colors[:, 0] > 110) & (inner_colors[:, 0] < 130))
+if __name__ == '__main__':
+    result=[]
+    for filename in sorted(glob('public_imgs/*.PNG')):
+        DC = DetermineColor(filename)
+        result.append(DC)
+    print(result)
 
-                # Determine the predominant color
-                if Rtotal > Gtotal and Rtotal > Btotal:
-                    msg.frame_id = '-1'  # CW
-                elif Gtotal > Rtotal and Gtotal > Btotal:
-                    msg.frame_id = '0'   # STOP
-                else:
-                    msg.frame_id = '+1'  # CCW
 
-            except Exception as e:
-                self.get_logger().error(f"Color determination failed: {e}")
-                msg.frame_id = '+1'
 
             # publish color_state
             self.color_pub.publish(msg)
-
-            # 시각화된 이미지를 퍼블리시하기 위한 추가 기능
-            visualized_image_msg = self.bridge.cv2_to_imgmsg(image, encoding='bgr8')
-            visualized_image_msg.header = data.header
-            self.color_pub.publish(visualized_image_msg)
-
         except CvBridgeError as e:
-            self.get_logger().error(f'Failed to convert image: {e}')
+            self.get_logger().error('Failed to convert image: %s' % e)
+
 
 if __name__ == '__main__':
     rclpy.init()
