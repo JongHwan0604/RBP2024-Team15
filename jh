@@ -12,71 +12,68 @@ class DetermineColor(Node):
         self.image_sub = self.create_subscription(Image, '/camera/color/image_raw', self.callback, 10)
         self.color_pub = self.create_publisher(Header, '/rotate_cmd', 10)
         self.bridge = CvBridge()
+        self.tracker = cv2.TrackerKCF_create()  # KCF 트래커 생성
+        self.initBB = None  # 트래킹할 객체의 초기 바운딩 박스
 
     def callback(self, data):
         try:
-            # 이미지 토픽 수신
+            # listen image topic
             image = self.bridge.imgmsg_to_cv2(data, 'bgr8')
 
-            # 이미지의 너비와 높이
-            height, width = image.shape[:2]
-
-            # 테두리 정의 (예: 전체 이미지의 5%)
-            border_size = 0.05
-            border_width = int(width * border_size)
-            border_height = int(height * border_size)
-
-            # 테두리 부분 추출
-            top_border = image[:border_height, :]
-            bottom_border = image[-border_height:, :]
-            left_border = image[:, :border_width]
-            right_border = image[:, -border_width:]
-
-            # 회전 명령 메시지 준비
+            # prepare rotate_cmd msg
             msg = Header()
-            msg.stamp = self.get_clock().now().to_msg()
-            msg.frame_id = '0'  # 기본값: STOP
+            msg.stamp = data.header.stamp
+            msg.frame_id = '0'  # default: STOP
 
-            # 테두리 색상 분석
-            Rtotal, Gtotal, Btotal = 0, 0, 0
+            # 초기 바운딩 박스 설정
+            if self.initBB is None:
+                # 여기서 바운딩 박스를 수동으로 설정할 수 있습니다.
+                self.initBB = cv2.selectROI("Frame", image, fromCenter=False, showCrosshair=True)
+                self.tracker.init(image, self.initBB)
 
-            borders = [top_border, bottom_border, left_border, right_border]
+            # 트래킹 업데이트
+            (success, box) = self.tracker.update(image)
 
-            for border in borders:
-                hsv_border = cv2.cvtColor(border, cv2.COLOR_BGR2HSV)
-                
-                # 색상 범위 정의 (검은색 제외)
+            if success:
+                (x, y, w, h) = [int(v) for v in box]
+                cv2.rectangle(image, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                # 트래킹한 영역 내에서 색상 분석
+                roi = image[y:y+h, x:x+w]
+                hsv_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+
                 lower_black = np.array([0, 0, 0], dtype=np.uint8)
-                upper_black = np.array([180, 255, 30], dtype=np.uint8)
+                upper_black = np.array([80, 100, 100], dtype=np.uint8)
 
-                mask_black = cv2.inRange(hsv_border, lower_black, upper_black)
-                non_black_border = cv2.bitwise_and(hsv_border, hsv_border, mask=~mask_black)
+                Rtotal, Gtotal, Btotal = 0, 0, 0
 
-                # HSV 기준에 따라 색상 계산
-                Rtotal += np.sum((non_black_border[:, :, 0] >= 0) & (non_black_border[:, :, 0] <= 10))
-                Rtotal += np.sum((non_black_border[:, :, 0] >= 170) & (non_black_border[:, :, 0] <= 180))
-                Gtotal += np.sum((non_black_border[:, :, 0] >= 50) & (non_black_border[:, :, 0] <= 70))
-                Btotal += np.sum((non_black_border[:, :, 0] >= 110) & (non_black_border[:, :, 0] <= 130))
+                black_indices = np.where(np.all(np.logical_and(lower_black <= hsv_roi, hsv_roi <= upper_black), axis=-1))
+                if len(black_indices[0]) >= 2:
+                    left_black_index = black_indices[1][0]
+                    right_black_index = black_indices[1][-1]
+                    inner_colors = hsv_roi[:, left_black_index:right_black_index]
 
-            # 색상에 따른 회전 방향 결정
-            if Rtotal > Gtotal and Rtotal > Btotal:
-                msg.frame_id = '-1'  # 시계 방향
-            elif Gtotal > Rtotal and Gtotal > Btotal:
-                msg.frame_id = '0'   # 정지
-            else:
-                msg.frame_id = '+1'  # 반시계 방향
+                    Rtotal += np.sum(((inner_colors[:, :, 0] > 170) | (inner_colors[:, :, 0] < 10)))
+                    Gtotal += np.sum(((inner_colors[:, :, 0] > 50) & (inner_colors[:, :, 0] < 70)))
+                    Btotal += np.sum(((inner_colors[:, :, 0] > 110) & (inner_colors[:, :, 0] < 130)))
 
-            # 색상 상태 발행
+                if Rtotal > Gtotal and Rtotal > Btotal:
+                    msg.frame_id = '-1'  # CW
+                elif Gtotal > Rtotal and Gtotal > Btotal:
+                    msg.frame_id = '0'  # STOP
+                else:
+                    msg.frame_id = '+1'  # CCW
+
             self.color_pub.publish(msg)
-        except CvBridgeError as e:
-            self.get_logger().error('이미지 변환 실패: %s' % e)
 
-def main(args=None):
-    rclpy.init(args=args)
+        except CvBridgeError as e:
+            self.get_logger().error(f'Failed to convert image: {e}')
+        except Exception as e:
+            self.get_logger().error(f'Unexpected error: {e}')
+
+if __name__ == '__main__':
+    rclpy.init()
     detector = DetermineColor()
     rclpy.spin(detector)
     detector.destroy_node()
     rclpy.shutdown()
 
-if __name__ == '__main__':
-    main()
