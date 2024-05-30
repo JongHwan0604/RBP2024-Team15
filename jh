@@ -1,103 +1,74 @@
 import rclpy
 import numpy as np
 import cv2
-from glob import glob
 from rclpy.node import Node
 
-from sensor_msgs.msg import Image, CompressedImage
+from sensor_msgs.msg import Image
 from cv_bridge import CvBridge, CvBridgeError
 from std_msgs.msg import Header
 
 class DetermineColor(Node):
     def __init__(self):
         super().__init__('color_detector')
-        self.image_sub = self.create_subscription(Image, '/color', self.callback, 10)
+        self.image_sub = self.create_subscription(Image, '/camera/color/image_raw', self.callback, 10)
         self.color_pub = self.create_publisher(Header, '/rotate_cmd', 10)
         self.bridge = CvBridge()
 
     def callback(self, data):
         try:
-            # 이미지 주제 수신
+            # 이미지 토픽 수신
             image = self.bridge.imgmsg_to_cv2(data, 'bgr8')
+            
+            # 이미지 전처리
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            blurred = cv2.GaussianBlur(gray, (7, 7), 0)
+            edged = cv2.Canny(blurred, 50, 150)
+            
+            # 윤곽선 검출
+            contours, _ = cv2.findContours(edged.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            # 가장 큰 윤곽선 찾기
+            if contours:
+                largest_contour = max(contours, key=cv2.contourArea)
+                rect = cv2.minAreaRect(largest_contour)  # 회전된 사각형 영역 얻기
+                box = cv2.boxPoints(rect)  # 회전된 사각형의 꼭짓점 계산
+                box = np.int0(box)
+                
+                # 회전된 사각형 영역 내의 픽셀 분석
+                mask = np.zeros_like(gray)  # 마스크 초기화
+                cv2.drawContours(mask, [box], 0, (255, 255, 255), -1)  # 회전된 사각형으로 마스크 생성
+                pixels = cv2.bitwise_and(image, image, mask=mask)  # 마스크 적용하여 픽셀 추출
+                
+                # 색상 분석
+                hsv = cv2.cvtColor(pixels, cv2.COLOR_BGR2HSV)
+                mask_red = cv2.inRange(hsv, (0, 70, 50), (10, 255, 255)) | cv2.inRange(hsv, (170, 70, 50), (180, 255, 255))
+                mask_green = cv2.inRange(hsv, (50, 70, 50), (70, 255, 255))
+                mask_blue = cv2.inRange(hsv, (110, 70, 50), (130, 255, 255))
+                
+                # 색상에 따른 회전 방향 결정
+                Rtotal = cv2.countNonZero(mask_red)
+                Gtotal = cv2.countNonZero(mask_green)
+                Btotal = cv2.countNonZero(mask_blue)
 
-            # rotate_cmd 메시지 준비
-            msg = Header()
-            msg = data.header
-            msg.frame_id = '0'  # 기본값: 정지
+                # prepare rotate_cmd msg
+                msg = Header()
+                msg = data.header
+                if Rtotal > Gtotal and Rtotal > Btotal:
+                    msg.frame_id = '-1'  # 시계 방향
+                elif Gtotal > Rtotal and Gtotal > Btotal:
+                    msg.frame_id = '0'   # 정지
+                else:
+                    msg.frame_id = '+1'  # 반시계 방향
 
-            # 배경 색상 결정
-            # TODO: 색상을 결정하고 frame_id에 +1, 0, 또는 -1 할당
-            # msg.frame_id = '+1' # 반시계 방향
-            # msg.frame_id = '0'  # 정지
-            # msg.frame_id = '-1' # 시계 방향
-
-            # publish color_state
-            self.color_pub.publish(msg)
+                # 색상 상태 발행
+                self.color_pub.publish(msg)
         except CvBridgeError as e:
-            self.get_logger().error('Failed to convert image: %s' % e)
-
-def determine_color_from_file(filename):
-    img_0 = cv2.imread(filename)    
-    
-    if img_0 is None:
-        return None
-
-    img_1 = cv2.cvtColor(img_0, cv2.COLOR_BGR2HSV)
-
-    B = cv2.inRange(img_1, np.array([0,0,0]), np.array([180,255,50]))
-    C, _ = cv2.findContours(B, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    mps = filter_contours(C)
-        
-    if not mps:
-        return None
-
-    CR = {'R': 0, 'G': 0, 'B': 0}
-    for mp in mps:
-        mask = np.zeros(img_1.shape[:2], dtype = np.uint8)
-        cv2.drawContours(mask, [mp], -1, 255, -1)
-        mrh = cv2.bitwise_and(img_1, img_1, mask=mask)
-        
-        rm = cv2.inRange(mrh, (0, 50, 50), (10, 255, 255)) | cv2.inRange(mrh, (170, 50, 50), (180, 255, 255))
-        gm = cv2.inRange(mrh, (50, 50, 50), (70, 255, 255))
-        bm = cv2.inRange(mrh, (110, 50, 50), (130, 255, 255))
-        
-        CR['R'] += cv2.countNonZero(rm)
-        CR['G'] += cv2.countNonZero(gm)
-        CR['B'] += cv2.countNonZero(bm)
-        
-    DC = max(CR, key=CR.get)
-    return DC
-
-def filter_contours(contours):
-    max_contour = None
-    max_area = -1
-    for contour in contours:
-        area = cv2.contourArea(contour)
-        if area > max_area:
-            enf = cv2.arcLength(contour, True)
-            rms = cv2.approxPolyDP(contour, 0.02*enf, True)
-            if len(rms) == 4:  # Assuming it's a rectangle
-                max_contour = contour
-                max_area = area
-    if max_contour is not None:
-        return [max_contour]  # Return only the contour with the largest area
-    else:
-        return []
+            self.get_logger().error('이미지 변환 실패: %s' % e)
 
 if __name__ == '__main__':
     rclpy.init()
-    try:
-        detector = DetermineColor()
-        rclpy.spin(detector)
-    finally:
-        detector.destroy_node()
-        rclpy.shutdown()
-
-    # 파일로부터 색상 결정 부분은 별도의 실행 코드로 필요 시 사용
-    # result = []
-    # for filename in sorted(glob('public_imgs/*.PNG')):
-    #     DC = determine_color_from_file(filename)
-    #     result.append(DC)
-    # print(result)
+    detector = DetermineColor()
+    rclpy.spin(detector)
+    detector.destroy_node()
+    rclpy.shutdown()
 
