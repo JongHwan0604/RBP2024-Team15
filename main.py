@@ -3,7 +3,6 @@ from rclpy.node import Node
 import numpy as np
 import cv2
 from glob import glob
-
 from sensor_msgs.msg import Image, CompressedImage
 from cv_bridge import CvBridge, CvBridgeError
 from std_msgs.msg import Header
@@ -34,19 +33,20 @@ class DetermineColor(Node):
             # msg.frame_id = '-1' # CW 
             
 
+ 
 
     def DetermineColor(filename):
-        img_0 = cv2.imread(filename)    
+    img_0 = cv2.imread(filename)    
     
-    if img_0 is None:
-        return None
+        if img_0 is None:
+            return None
 
     img_1 = cv2.cvtColor(img_0, cv2.COLOR_BGR2HSV)
 
     B=cv2.inRange(img_1, np.array([0,0,0]), np.array([180,255,50]))
     C,_=cv2.findContours(B, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    def filter_contours(contours):
+    def DetermineColor(contours):
         filtered_contours = []
         for contour in contours:
             if cv2.contourArea(contour) > 2000:
@@ -85,8 +85,6 @@ if __name__ == '__main__':
         result.append(DC)
     print(result)
 
-
-
             # publish color_state
             self.color_pub.publish(msg)
         except CvBridgeError as e:
@@ -99,4 +97,3 @@ if __name__ == '__main__':
     rclpy.spin(detector)
     detector.destroy_node()
     rclpy.shutdown()
-
