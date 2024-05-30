@@ -9,78 +9,74 @@ from std_msgs.msg import Header
 class DetermineColor(Node):
     def __init__(self):
         super().__init__('color_detector')
-        self.image_sub = self.create_subscription(Image, '/color', self.callback, 10)
+        self.image_sub = self.create_subscription(Image, '/camera/color/image_raw', self.callback, 10)
         self.color_pub = self.create_publisher(Header, '/rotate_cmd', 10)
         self.bridge = CvBridge()
 
     def callback(self, data):
         try:
+            # 이미지 토픽 수신
             image = self.bridge.imgmsg_to_cv2(data, 'bgr8')
+
+            # 이미지의 너비와 높이
+            height, width = image.shape[:2]
+
+            # 테두리 정의 (예: 전체 이미지의 5%)
+            border_size = 0.05
+            border_width = int(width * border_size)
+            border_height = int(height * border_size)
+
+            # 테두리 부분 추출
+            top_border = image[:border_height, :]
+            bottom_border = image[-border_height:, :]
+            left_border = image[:, :border_width]
+            right_border = image[:, -border_width:]
+
+            # 회전 명령 메시지 준비
             msg = Header()
-            msg.stamp = data.header.stamp
-            msg.frame_id = '0'  # default: STOP
+            msg.stamp = self.get_clock().now().to_msg()
+            msg.frame_id = '0'  # 기본값: STOP
 
-            try:
-                hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-                # 여기서부터 윤곽선 검출과 처리 로직이 시작됩니다.
-                blurred_image = cv2.GaussianBlur(hsv_image, (7, 7), 0)
+            # 테두리 색상 분석
+            Rtotal, Gtotal, Btotal = 0, 0, 0
 
-                # 색상 범위 정의 및 마스크 생성과정은 동일합니다.
-                lower_red1 = np.array([0, 50, 50])
-                upper_red1 = np.array([10, 255, 255])
-                lower_red2 = np.array([170, 50, 50])
-                upper_red2 = np.array([180, 255, 255])
-                lower_green = np.array([35, 50, 50])
-                upper_green = np.array([85, 255, 255])
-                lower_blue = np.array([100, 50, 50])
-                upper_blue = np.array([140, 255, 255])
+            borders = [top_border, bottom_border, left_border, right_border]
 
-                mask_red = cv2.inRange(blurred_image, lower_red1, upper_red1) + cv2.inRange(blurred_image, lower_red2, upper_red2)
-                mask_green = cv2.inRange(blurred_image, lower_green, upper_green)
-                mask_blue = cv2.inRange(blurred_image, lower_blue, upper_blue)
-
-                # 윤곽선 검출
-                contours, _ = cv2.findContours(mask_red, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            for border in borders:
+                hsv_border = cv2.cvtColor(border, cv2.COLOR_BGR2HSV)
                 
-                for contour in contours:
-                    # 윤곽선의 무게 중심과 경계상자를 계산합니다.
-                    M = cv2.moments(contour)
-                    if M['m00'] != 0:
-                        cX = int(M['m10'] / M['m00'])
-                        cY = int(M['m01'] / M['m00'])
+                # 색상 범위 정의 (검은색 제외)
+                lower_black = np.array([0, 0, 0], dtype=np.uint8)
+                upper_black = np.array([180, 255, 30], dtype=np.uint8)
 
-                        # 윤곽선의 경계 상자를 그립니다.
-                        rect = cv2.minAreaRect(contour)
-                        box = cv2.boxPoints(rect)
-                        box = np.int0(box)
-                        cv2.drawContours(image,[box],0,(0,0,255),2)
+                mask_black = cv2.inRange(hsv_border, lower_black, upper_black)
+                non_black_border = cv2.bitwise_and(hsv_border, hsv_border, mask=~mask_black)
 
-                        # 여기서 box의 각도를 이용해 로직을 추가할 수 있습니다.
+                # HSV 기준에 따라 색상 계산
+                Rtotal += np.sum((non_black_border[:, :, 0] >= 0) & (non_black_border[:, :, 0] <= 10))
+                Rtotal += np.sum((non_black_border[:, :, 0] >= 170) & (non_black_border[:, :, 0] <= 180))
+                Gtotal += np.sum((non_black_border[:, :, 0] >= 50) & (non_black_border[:, :, 0] <= 70))
+                Btotal += np.sum((non_black_border[:, :, 0] >= 110) & (non_black_border[:, :, 0] <= 130))
 
-                # 여기서부터 색상에 따른 조건부 처리가 계속됩니다.
-                red_count = cv2.countNonZero(mask_red)
-                green_count = cv2.countNonZero(mask_green)
-                blue_count = cv2.countNonZero(mask_blue)
+            # 색상에 따른 회전 방향 결정
+            if Rtotal > Gtotal and Rtotal > Btotal:
+                msg.frame_id = '-1'  # 시계 방향
+            elif Gtotal > Rtotal and Gtotal > Btotal:
+                msg.frame_id = '0'   # 정지
+            else:
+                msg.frame_id = '+1'  # 반시계 방향
 
-                if red_count > green_count and red_count > blue_count:
-                    msg.frame_id = '-1'  # CW
-                elif green_count > red_count and green_count > blue_count:
-                    msg.frame_id = '0'  # STOP
-                elif blue_count > red_count and blue_count > green_count:
-                    msg.frame_id = '+1'  # CCW
-                else:
-                    msg.frame_id = '0'  # Default to STOP if no clear predominant color
-            except Exception as e:
-                self.get_logger().error(f'Error in color detection: {e}')
-                msg.frame_id = '0'
-
+            # 색상 상태 발행
             self.color_pub.publish(msg)
         except CvBridgeError as e:
-            self.get_logger().error(f'Failed to convert image: {e}')
+            self.get_logger().error('이미지 변환 실패: %s' % e)
 
-if __name__ == '__main__':
-    rclpy.init()
+def main(args=None):
+    rclpy.init(args=args)
     detector = DetermineColor()
     rclpy.spin(detector)
     detector.destroy_node()
     rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
