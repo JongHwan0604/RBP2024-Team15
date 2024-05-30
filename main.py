@@ -36,14 +36,13 @@ class DetermineColor(Node):
             try:
 
                 hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-
+		# lower_black, upper_black is thershold of color black
                 lower_black = np.array([0, 0, 0], dtype=np.uint8)
-                upper_black = np.array([20, 20, 20], dtype=np.uint8)
+                upper_black = np.array([15, 50, 50], dtype=np.uint8)
 
                 Rtotal, Gtotal, Btotal = 0, 0, 0
-                total_pixels = 0
 
-                for i, row in enumerate(hsv_image):
+                for row in hsv_image:
                 # 검은색의 위치 찾기
                     black_indices = np.where(np.all(np.logical_and(lower_black <= row, row <= upper_black), axis=-1))[0]
 
@@ -54,16 +53,12 @@ class DetermineColor(Node):
                         # 테두리 내부의 색상 추출
                         inner_colors = row[left_black_index:right_black_index]
                         
-                        # 흰색으로 칸을 바꿈
-                        image[i, left_black_index:right_black_index] = (255, 255, 255)
                         
                         # HSV 기준에 맞는 색상만을 추출하여 픽셀 수 및 각 색상 채널별 픽셀 수 계산
-                        Rtotal += np.sum(((inner_colors[:, 0] > 170) | (inner_colors[:, 0] < 10)) & (inner_colors[:, 1] > 50) & (inner_colors[:, 2] > 50))
-                        Gtotal += np.sum(((inner_colors[:, 0] > 50) & (inner_colors[:, 0] < 70)) & (inner_colors[:, 1] > 50) & (inner_colors[:, 2] > 50))
-                        Btotal += np.sum(((inner_colors[:, 0] > 110) & (inner_colors[:, 0] < 130)) & (inner_colors[:, 1] > 50) & (inner_colors[:, 2] > 50))
+                        Rtotal += np.sum(((inner_colors[:, 0] > 170) | (inner_colors[:, 0] < 10)))
+                        Gtotal += np.sum(((inner_colors[:, 0] > 50) & (inner_colors[:, 0] < 70)))
+                        Btotal += np.sum(((inner_colors[:, 0] > 110) & (inner_colors[:, 0] < 130)))
 
-
-                        total_pixels += len(inner_colors)
 
 
 
@@ -75,7 +70,7 @@ class DetermineColor(Node):
                     msg.frame_id = '+1'
             
             except:
-                msg.frame_id = '0'
+                msg.frame_id = '+1'
                 
 
             # publish color_state
