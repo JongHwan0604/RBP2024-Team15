@@ -6,11 +6,11 @@ from sensor_msgs.msg import Image
 from cv_bridge import CvBridge, CvBridgeError
 from std_msgs.msg import Header
 
-class MonitorEdgeDetector(Node):
+class DetermineColor(Node):
     def __init__(self):
-        super().__init__('monitor_edge_detector')
+        super().__init__('color_detector')
         self.image_sub = self.create_subscription(Image, '/color', self.callback, 10)
-        self.edge_pub = self.create_publisher(Header, '/rotate_cmd', 10)
+        self.color_pub = self.create_publisher(Header, '/rotate_cmd', 10)
         self.bridge = CvBridge()
 
     def callback(self, data):
@@ -24,22 +24,27 @@ class MonitorEdgeDetector(Node):
             # 이미지를 HSV로 변환
             hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
             
-            # Value(명도)가 낮은 영역 찾기 (검은색 영역)
-            low_value_area = hsv_image[:,:,2] < 30  # Value 임곗값 조정 필요
+            # 전체 이미지에서 가장 많이 차지하는 색상 찾기
+            flat_hsv = hsv_image.reshape(-1, hsv_image.shape[-1])
+            unique, counts = np.unique(flat_hsv, return_counts=True, axis=0)
+            dominant_color = unique[np.argmax(counts)]
             
-            # 검은색 영역이 충분히 큰 경우(예: 모니터 테두리로 간주)
-            if np.sum(low_value_area) > (hsv_image.shape[0] * hsv_image.shape[1] * 0.1):  # 검은색 영역 비율 조정 필요
-                msg.frame_id = '1'  # 검은색 모니터 테두리 감지
-            else:
-                msg.frame_id = '0'  # 검은색 모니터 테두리 미감지
+            # H 값에 따라 명령 결정
+            hue = dominant_color[0]
+            if 0 <= hue < 30 or 150 <= hue <= 180:  # 빨간색 범위
+                msg.frame_id = '-1'  # CW
+            elif 30 <= hue < 90:  # 초록색 범위
+                msg.frame_id = '0'   # 정지
+            else:  # 나머지는 파란색으로 간주
+                msg.frame_id = '+1'  # CCW
             
-            self.edge_pub.publish(msg)
+            self.color_pub.publish(msg)
         except CvBridgeError as e:
             self.get_logger().error('이미지 변환 실패: %s' % e)
 
 if __name__ == '__main__':
     rclpy.init()
-    detector = MonitorEdgeDetector()
+    detector = DetermineColor()
     rclpy.spin(detector)
     detector.destroy_node()
     rclpy.shutdown()
