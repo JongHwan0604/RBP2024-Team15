@@ -1,52 +1,10 @@
 import rclpy
 from rclpy.node import Node
-import numpy as np
-import cv2
-from glob import glob
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge, CvBridgeError
 from std_msgs.msg import Header
-
-def filter_contours(contours):
-    filtered_contours = []
-    for contour in contours:
-        if cv2.contourArea(contour) > 2000:
-            enf = cv2.arcLength(contour, True)
-            rms = cv2.approxPolyDP(contour, 0.02*enf, True)
-            if len(rms) == 4:
-                filtered_contours.append(contour)
-    return filtered_contours
-
-def DetermineColor(filename):
-    img_0 = cv2.imread(filename)    
-    if img_0 is None:
-        return None
-
-    img_1 = cv2.cvtColor(img_0, cv2.COLOR_BGR2HSV)
-
-    B = cv2.inRange(img_1, np.array([0,0,0]), np.array([180,255,50]))
-    C, _ = cv2.findContours(B, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    mps = filter_contours(C)
-        
-    if not mps:
-        return None
-
-    CR = {'R': 0, 'G': 0, 'B': 0}
-    for mp in mps:
-        mask = np.zeros(img_1.shape[:2], dtype = np.uint8)
-        cv2.drawContours(mask, [mp], -1, 255, -1)
-        mrh = cv2.bitwise_and(img_1, img_1, mask=mask)
-        
-        rm = cv2.inRange(mrh, (0, 50, 50), (10, 255, 255)) | cv2.inRange(mrh, (170, 50, 50), (180, 255, 255))
-        gm = cv2.inRange(mrh, (50, 50, 50), (70, 255, 255))
-        bm = cv2.inRange(mrh, (110, 50, 50), (130, 255, 255))
-        
-        CR['R'] += cv2.countNonZero(rm)
-        CR['G'] += cv2.countNonZero(gm)
-        CR['B'] += cv2.countNonZero(bm)
-        
-    DC = max(CR, key=CR.get)
-    return DC
+import numpy as np
+import cv2
 
 class DetermineColor(Node):
     def __init__(self):
@@ -57,36 +15,72 @@ class DetermineColor(Node):
 
     def callback(self, data):
         try:
+            # listen image topic
             image = self.bridge.imgmsg_to_cv2(data, 'bgr8')
+
+            # prepare rotate_cmd msg
+            # DO NOT DELETE THE BELOW THREE LINES!
             msg = Header()
-            msg.stamp = data.header.stamp
+            msg = data.header
             msg.frame_id = '0'  # default: STOP
-            
-            # 배경 색상 결정 로직 추가 예시
-            # 이 부분은 실제 사용 환경에 맞게 수정해야 합니다.
-            # 여기서는 단순히 이미지의 평균 BGR 값을 기준으로 색상을 결정합니다.
-            avg_color_per_row = np.average(image, axis=0)
-            avg_color = np.average(avg_color_per_row, axis=0)
-            if avg_color[2] > 100:  # 예시 조건
+
+            # determine background color
+            result = self.determine_color(image)
+            if result == 'R':
                 msg.frame_id = '+1'  # CCW
-            elif avg_color[1] > 100:  # 예시 조건
+            elif result == 'G':
+                msg.frame_id = '0'  # STOP
+            elif result == 'B':
                 msg.frame_id = '-1'  # CW
+
             # publish color_state
             self.color_pub.publish(msg)
         except CvBridgeError as e:
             self.get_logger().error('Failed to convert image: %s' % e)
 
-if __name__ == '__main__':
-    rclpy.init()
+    def determine_color(self, image):
+        img_hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        mask_black = cv2.inRange(img_hsv, np.array([0, 0, 0]), np.array([180, 255, 50]))
+        contours, _ = cv2.findContours(mask_black, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        def filter_contours(contours):
+            filtered_contours = []
+            for contour in contours:
+                if cv2.contourArea(contour) > 2000:
+                    enf = cv2.arcLength(contour, True)
+                    rms = cv2.approxPolyDP(contour, 0.02 * enf, True)
+                    if len(rms) == 4:
+                        filtered_contours.append(contour)
+            return filtered_contours
+
+        valid_contours = filter_contours(contours)
+
+        if not valid_contours:
+            return None
+
+        color_count = {'R': 0, 'G': 0, 'B': 0}
+        for contour in valid_contours:
+            mask = np.zeros(img_hsv.shape[:2], dtype=np.uint8)
+            cv2.drawContours(mask, [contour], -1, 255, -1)
+            masked_img = cv2.bitwise_and(img_hsv, img_hsv, mask=mask)
+
+            rm = cv2.inRange(masked_img, (0, 50, 50), (10, 255, 255)) | cv2.inRange(masked_img, (170, 50, 50), (180, 255, 255))
+            gm = cv2.inRange(masked_img, (50, 50, 50), (70, 255, 255))
+            bm = cv2.inRange(masked_img, (110, 50, 50), (130, 255, 255))
+
+            color_count['R'] += cv2.countNonZero(rm)
+            color_count['G'] += cv2.countNonZero(gm)
+            color_count['B'] += cv2.countNonZero(bm)
+
+        dominant_color = max(color_count, key=color_count.get)
+        return dominant_color
+
+def main(args=None):
+    rclpy.init(args=args)
     detector = DetermineColor()
     rclpy.spin(detector)
     detector.destroy_node()
     rclpy.shutdown()
 
-    # 파일 처리 부분을 별도의 스크립트로 실행하는 것을 고려해 보세요.
-    # if __name__ == '__main__':
-    #     result = []
-    #     for filename in sorted(glob('public_imgs/*.PNG')):
-    #         DC = DetermineColor(filename)
-    #         result.append(DC)
-    #     print(result)
+if __name__ == '__main__':
+    main()
