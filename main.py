@@ -1,46 +1,82 @@
 import rclpy
 import numpy as np
 import cv2
+from glob import glob
+
 from rclpy.node import Node
-from sensor_msgs.msg import Image
+
+from sensor_msgs.msg import Image, CompressedImage
 from cv_bridge import CvBridge, CvBridgeError
 from std_msgs.msg import Header
 
 class DetermineColor(Node):
     def __init__(self):
         super().__init__('color_detector')
-        self.image_sub = self.create_subscription(Image, '/color', self.callback, 10)
+        self.image_sub = self.create_subscription(Image, '/camera/color/image_raw', self.callback, 10)
         self.color_pub = self.create_publisher(Header, '/rotate_cmd', 10)
         self.bridge = CvBridge()
 
     def callback(self, data):
         try:
-            # 이미지 토픽을 듣고
+            # listen image topic
             image = self.bridge.imgmsg_to_cv2(data, 'bgr8')
+
+            # prepare rotate_cmd msg
+            # DO NOT DELETE THE BELOW THREE LINES!
             msg = Header()
             msg = data.header
-            msg.frame_id = '0'  # 기본값: 정지
+            msg.frame_id = '0'  # default: STOP
+    
+            # determine background color
+            # TODO 
+            # determine the color and assing +1, 0, or, -1 for frame_id
+            # msg.frame_id = '+1' # CCW 
+            # msg.frame_id = '0'  # STOP
+            # msg.frame_id = '-1' # CW 
+            try:
+
+                hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+
+                lower_black = np.array([0, 0, 0], dtype=np.uint8)
+                upper_black = np.array([15, 45, 45], dtype=np.uint8)
+
+                Rtotal, Gtotal, Btotal = 0, 0, 0
+
+                for row in hsv_image:
+                # 검은색의 위치 찾기
+                    black_indices = np.where(np.all(np.logical_and(lower_black <= row, row <= upper_black), axis=-1))[0]
+
+                    if len(black_indices) >= 2:
+                        left_black_index = black_indices[0]
+                        right_black_index = black_indices[-1]
+                        
+                        # 테두리 내부의 색상 추출
+                        inner_colors = row[left_black_index:right_black_index]
+                        
+                        
+                        # HSV 기준에 맞는 색상만을 추출하여 픽셀 수 및 각 색상 채널별 픽셀 수 계산
+                        Rtotal += np.sum(((inner_colors[:, 0] > 170) | (inner_colors[:, 0] < 10)))
+                        Gtotal += np.sum(((inner_colors[:, 0] > 50) & (inner_colors[:, 0] < 70)))
+                        Btotal += np.sum(((inner_colors[:, 0] > 110) & (inner_colors[:, 0] < 130))) 
+
+
+
+                if Rtotal > Gtotal and Rtotal > Btotal:
+                    msg.frame_id = '-1'
+                elif Gtotal > Rtotal and Gtotal > Btotal:
+                    msg.frame_id = '0'
+                else:
+                    msg.frame_id = '+1'
             
-            # 이미지를 HSV로 변환
-            hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-            
-            # 전체 이미지에서 가장 많이 차지하는 색상 찾기
-            flat_hsv = hsv_image.reshape(-1, hsv_image.shape[-1])
-            unique, counts = np.unique(flat_hsv, return_counts=True, axis=0)
-            dominant_color = unique[np.argmax(counts)]
-            
-            # H 값에 따라 명령 결정
-            hue = dominant_color[0]
-            if 0 <= hue < 30 or 150 <= hue <= 180:  # 빨간색 범위
-                msg.frame_id = '-1'  # CW
-            elif 30 <= hue < 90:  # 초록색 범위
-                msg.frame_id = '0'   # 정지
-            else:  # 나머지는 파란색으로 간주
-                msg.frame_id = '+1'  # CCW
-            
+            except:
+                msg.frame_id = '0'
+                
+
+            # publish color_state
             self.color_pub.publish(msg)
         except CvBridgeError as e:
-            self.get_logger().error('이미지 변환 실패: %s' % e)
+            self.get_logger().error('Failed to convert image: %s' % e)
+
 
 if __name__ == '__main__':
     rclpy.init()
