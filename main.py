@@ -17,40 +17,43 @@ class DetermineColor(Node):
 
     def callback(self, data):
         try:
-            # 이미지 토픽 수신
+            # Convert the ROS image message to OpenCV format
             image = self.bridge.imgmsg_to_cv2(data, 'bgr8')
 
-            # rotate_cmd 메시지 준비
+            # Prepare the rotate_cmd message
             msg = Header()
-            msg = data.header
-            msg.frame_id = '0'  # 기본값: STOP
+            msg.stamp = data.header.stamp
+            msg.frame_id = '0'  # Default: STOP
 
-            # 배경 색상 결정
+            # Determine the dominant color
             dominant_color = self.determine_dominant_color(image)
             if dominant_color == 'G':
-                # 초록색이 지배색이라면, 모니터로 간주할 수 있습니다.
-                # 여기서 원하는 로직으로 처리하세요. 예시로 frame_id를 '0'으로 설정합니다.
-                msg.frame_id = '0'  # STOP
+                msg.frame_id = '0'  # Example action: STOP for green
+            elif dominant_color == 'B':
+                msg.frame_id = '1'  # Example action: STOP for black
 
-            # color_state 발행
+            # Publish the rotate_cmd message
             self.color_pub.publish(msg)
         except CvBridgeError as e:
-            self.get_logger().error('이미지 변환 실패: %s' % e)
+            self.get_logger().error('Failed to convert image: %s' % str(e))
 
     def determine_dominant_color(self, image):
         img_hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
 
-        # 초록색 필터
-        green_mask = cv2.inRange(img_hsv, (36, 25, 25), (70, 255,255))
-        green = cv2.bitwise_and(image, image, mask=green_mask)
+        # Define color ranges in HSV
+        green_mask = cv2.inRange(img_hsv, (36, 25, 25), (70, 255, 255))
+        black_mask = cv2.inRange(img_hsv, (0, 0, 0), (180, 255, 30))
+
         green_pixels = cv2.countNonZero(green_mask)
+        black_pixels = cv2.countNonZero(black_mask)
 
-        # 여기에 다른 색상 필터를 추가할 수 있습니다.
-
-        # 지배색 결정
-        # 예시로 초록색만을 체크합니다. 필요에 따라 다른 색상도 추가하여 비교할 수 있습니다.
-        dominant_color = 'G' if green_pixels > 0 else 'None'
-        return dominant_color
+        # Determine the dominant color
+        if green_pixels > black_pixels:
+            return 'G'
+        elif black_pixels > 0:
+            return 'B'
+        else:
+            return 'None'
 
 if __name__ == '__main__':
     rclpy.init()
@@ -58,3 +61,4 @@ if __name__ == '__main__':
     rclpy.spin(detector)
     detector.destroy_node()
     rclpy.shutdown()
+
