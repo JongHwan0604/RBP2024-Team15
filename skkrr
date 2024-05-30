@@ -1,0 +1,73 @@
+import rclpy
+import numpy as np
+import cv2
+from rclpy.node import Node
+from sensor_msgs.msg import Image
+from cv_bridge import CvBridge, CvBridgeError
+from std_msgs.msg import Header
+
+class DetermineColor(Node):
+    def __init__(self):
+        super().__init__('color_detector')
+        self.image_sub = self.create_subscription(Image, '/color', self.callback, 10)
+        self.color_pub = self.create_publisher(Header, '/rotate_cmd', 10)
+        self.bridge = CvBridge()
+
+    def callback(self, data):
+        try:
+            # listen image topic
+            image = self.bridge.imgmsg_to_cv2(data, 'bgr8')
+
+            # prepare rotate_cmd msg
+            msg = Header()
+            msg.stamp = data.header.stamp
+            msg.frame_id = '0'  # default: STOP
+
+            try:
+                hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+
+                # Define color ranges
+                lower_red1 = np.array([0, 50, 50])
+                upper_red1 = np.array([10, 255, 255])
+                lower_red2 = np.array([170, 50, 50])
+                upper_red2 = np.array([180, 255, 255])
+                lower_green = np.array([35, 50, 50])
+                upper_green = np.array([85, 255, 255])
+                lower_blue = np.array([100, 50, 50])
+                upper_blue = np.array([140, 255, 255])
+
+                # Create masks for each color
+                mask_red = cv2.inRange(hsv_image, lower_red1, upper_red1) + cv2.inRange(hsv_image, lower_red2, upper_red2)
+                mask_green = cv2.inRange(hsv_image, lower_green, upper_green)
+                mask_blue = cv2.inRange(hsv_image, lower_blue, upper_blue)
+
+                # Count the number of pixels of each color
+                red_count = cv2.countNonZero(mask_red)
+                green_count = cv2.countNonZero(mask_green)
+                blue_count = cv2.countNonZero(mask_blue)
+
+                # Determine the predominant color
+                if red_count > green_count and red_count > blue_count:
+                    msg.frame_id = '-1'  # CW
+                elif green_count > red_count and green_count > blue_count:
+                    msg.frame_id = '0'  # STOP
+                elif blue_count > red_count and blue_count > green_count:
+                    msg.frame_id = '+1'  # CCW
+                else:
+                    msg.frame_id = '0'  # Default to STOP if no clear predominant color
+
+            except Exception as e:
+                self.get_logger().error(f'Error in color detection: {e}')
+                msg.frame_id = '0'
+
+            # publish color_state
+            self.color_pub.publish(msg)
+        except CvBridgeError as e:
+            self.get_logger().error(f'Failed to convert image: {e}')
+
+if __name__ == '__main__':
+    rclpy.init()
+    detector = DetermineColor()
+    rclpy.spin(detector)
+    detector.destroy_node()
+    rclpy.shutdown()
