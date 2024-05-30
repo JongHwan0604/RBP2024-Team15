@@ -1,87 +1,45 @@
 import rclpy
 import numpy as np
 import cv2
-from glob import glob
-
 from rclpy.node import Node
-
-from sensor_msgs.msg import Image, CompressedImage
+from sensor_msgs.msg import Image
 from cv_bridge import CvBridge, CvBridgeError
 from std_msgs.msg import Header
 
-class DetermineColor(Node):
+class MonitorEdgeDetector(Node):
     def __init__(self):
-        super().__init__('color_detector')
-        self.image_sub = self.create_subscription(Image, '/camera/color/image_raw', self.callback, 10)
-        self.color_pub = self.create_publisher(Header, '/rotate_cmd', 10)
+        super().__init__('monitor_edge_detector')
+        self.image_sub = self.create_subscription(Image, '/color', self.callback, 10)
+        self.edge_pub = self.create_publisher(Header, '/rotate_cmd', 10)
         self.bridge = CvBridge()
 
     def callback(self, data):
         try:
-            # listen image topic
+            # 이미지 토픽을 듣고
             image = self.bridge.imgmsg_to_cv2(data, 'bgr8')
-
-            # prepare rotate_cmd msg
-            # DO NOT DELETE THE BELOW THREE LINES!
             msg = Header()
             msg = data.header
-            msg.frame_id = '0'  # default: STOP
-    
-            # determine background color
-            # TODO 
-            # determine the color and assing +1, 0, or, -1 for frame_id
-            # msg.frame_id = '+1' # CCW 
-            # msg.frame_id = '0'  # STOP
-            # msg.frame_id = '-1' # CW 
-            try:
-
-                hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-      # lower_black, upper_black is thershold of color black
-                lower_black = np.array([0, 0, 0], dtype=np.uint8)
-                upper_black = np.array([15, 50, 50], dtype=np.uint8)
-
-                Rtotal, Gtotal, Btotal = 0, 0, 0
-
-                for row in hsv_image:
-                # 검은색의 위치 찾기
-                    black_indices = np.where(np.all(np.logical_and(lower_black <= row, row <= upper_black), axis=-1))[0]
-
-                    if len(black_indices) >= 2:
-                        left_black_index = black_indices[0]
-                        right_black_index = black_indices[-1]
-                        
-                        # 테두리 내부의 색상 추출
-                        inner_colors = row[left_black_index:right_black_index]
-                        
-                        
-                        # HSV 기준에 맞는 색상만을 추출하여 픽셀 수 및 각 색상 채널별 픽셀 수 계산
-                        Rtotal += np.sum(((inner_colors[:, 0] > 170) | (inner_colors[:, 0] < 10)))
-                        Gtotal += np.sum(((inner_colors[:, 0] > 50) & (inner_colors[:, 0] < 70)))
-                        Btotal += np.sum(((inner_colors[:, 0] > 110) & (inner_colors[:, 0] < 130)))
-
-
-
-
-                if Rtotal > Gtotal and Rtotal > Btotal:
-                    msg.frame_id = '-1'
-                elif Gtotal > Rtotal and Gtotal > Btotal:
-                    msg.frame_id = '0'
-                else:
-                    msg.frame_id = '+1'
+            msg.frame_id = '0'  # 기본값: 정지
             
-            except:
-                msg.frame_id = '+1'
-                
-
-            # publish color_state
-            self.color_pub.publish(msg)
+            # 이미지를 HSV로 변환
+            hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+            
+            # Value(명도)가 낮은 영역 찾기 (검은색 영역)
+            low_value_area = hsv_image[:,:,2] < 30  # Value 임곗값 조정 필요
+            
+            # 검은색 영역이 충분히 큰 경우(예: 모니터 테두리로 간주)
+            if np.sum(low_value_area) > (hsv_image.shape[0] * hsv_image.shape[1] * 0.1):  # 검은색 영역 비율 조정 필요
+                msg.frame_id = '1'  # 검은색 모니터 테두리 감지
+            else:
+                msg.frame_id = '0'  # 검은색 모니터 테두리 미감지
+            
+            self.edge_pub.publish(msg)
         except CvBridgeError as e:
-            self.get_logger().error('Failed to convert image: %s' % e)
-
+            self.get_logger().error('이미지 변환 실패: %s' % e)
 
 if __name__ == '__main__':
     rclpy.init()
-    detector = DetermineColor()
+    detector = MonitorEdgeDetector()
     rclpy.spin(detector)
     detector.destroy_node()
     rclpy.shutdown()
