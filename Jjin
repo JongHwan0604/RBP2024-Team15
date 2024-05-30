@@ -1,0 +1,112 @@
+
+
+import numpy as np
+import cv2
+from glob import glob
+
+
+def color_detector(filename):
+  
+  def checkImage(x, y,image, buffer):
+    H, W = image.shape
+
+    if x not in range(W) or y not in range(H):
+      return False
+    elif buffer[y,x] != 0 or image[y,x] >  :
+      return False
+    else :
+      return True
+
+  def dfs(x,y,image,buffer):
+    stack = [(x,y)]
+    border = []
+    neighbor = [(-1,0),(-1,-1),(-1,1),(0,-1),(0,1),(1,-1),(1, 0),(1,1)]
+    buffer[y,x]=1
+
+    while stack :
+      x, y = stack.pop()
+      if (x, y) not in border :
+        border.append((x,y))
+        for dx, dy in neighbor :
+          nx, ny = x + dx, y + dy
+          if checkImage(nx, ny, image, buffer):
+            stack.append((nx,ny))
+            buffer[ny,nx] = 1
+
+    return border
+
+  def find_max_border(image):
+    buffer = np.zeros_like(image)
+    max_border = []
+    max_border_size = 0
+    H, W = image.shape
+
+    for y in range(H):
+      for x in range(W):
+        if checkImage(x, y , image, buffer):
+          border = dfs(x, y, image, buffer)
+          if  len(border) > max_border_size:
+            max_border_size = len(border)
+            max_border = border
+
+    return max_border
+
+  def interior(image):
+    border = find_max_border(image)
+
+    x_border = [pair[0] for pair in border]
+    x_border.sort()
+    a = x_border[0]
+    b = x_border[-1]
+    interior = []
+
+    for i in range(a, b, 1) : # x 에 해당 # 연산속도를 위해 step을 3으로
+      filtered_border = [pair[1] for pair in border if pair[0] == i]
+      filtered_border.sort()
+
+      if len(filtered_border) != 0 :
+        max_y = filtered_border[-1]
+        min_y = filtered_border[0]
+        for j in range(min_y, max_y, 1) : # y에 해당
+          if (j,i) not in border :# black 이 아니면
+            interior.append((j,i)) #(y,x) 순서
+
+    return interior
+
+  image = cv2.imread(filename)
+  r, g, b = cv2.split(image)
+  H, W = r.shape  
+  img = cv2.resize(image,(int(W/3),int(H/3)) )
+  hsv_img = cv2.cvtColor(img,cv2.COLOR_BGR2HSV)
+  h, s, v = cv2.split(hsv_img)
+  inter = interior(v)
+  RED = 0
+  GREEN = 0
+  BLUE = 0
+
+  for i in range(len(inter)) :
+      hue, sat, val = h[inter[i]], s[inter[i]], v[inter[i]]
+      if sat > 50 and val > 50 :
+        if (170 < hue or hue < 10) :
+          RED += 1
+        if 50 < hue < 70 :
+          GREEN += 1
+        if 110 < hue < 130 :
+          BLUE += 1
+
+  if max(RED, GREEN, BLUE) == RED :
+    return 'R',RED, len(find_max_border(v))
+  if max(RED, GREEN, BLUE) == GREEN :
+    return 'G', GREEN, len(find_max_border(v))
+  if max(RED, GREEN, BLUE) == BLUE :
+    return 'B', BLUE, len(find_max_border(v))
+
+  
+if __name__ == '__main__':
+    result = []
+    for filename in sorted(glob('public_imgs/*.PNG')):
+        result.append(color_detector(filename))
+    print(result)
+
+
+
