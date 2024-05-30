@@ -2,9 +2,7 @@ import rclpy
 from rclpy.node import Node
 import numpy as np
 import cv2
-from glob import glob
-
-from sensor_msgs.msg import Image, CompressedImage
+from sensor_msgs.msg import Image
 from cv_bridge import CvBridge, CvBridgeError
 from std_msgs.msg import Header
 
@@ -17,48 +15,77 @@ class DetermineColor(Node):
 
     def callback(self, data):
         try:
-            # Convert the ROS image message to OpenCV format
+            # 이미지 토픽을 듣습니다.
             image = self.bridge.imgmsg_to_cv2(data, 'bgr8')
 
-            # Prepare the rotate_cmd message
+            # rotate_cmd 메시지를 준비합니다.
             msg = Header()
-            msg.stamp = data.header.stamp
-            msg.frame_id = '0'  # Default: STOP
+            msg = data.header
+            msg.frame_id = '0'  # 기본값: 정지
 
-            # Determine the dominant color
-            dominant_color = self.determine_dominant_color(image)
-            if dominant_color == 'G':
-                msg.frame_id = '0'  # Example action: STOP for green
-            elif dominant_color == 'B':
-                msg.frame_id = '1'  # Example action: STOP for black
-
-            # Publish the rotate_cmd message
+            # 배경 색상을 결정합니다.
+            # TODO
+            # 색상을 결정하고 frame_id에 +1, 0, -1을 할당합니다.
+            determined_color = self.determine_color(image)
+            if determined_color == 'R':
+                msg.frame_id = '+1'  # 반시계 방향
+            elif determined_color == 'G':
+                msg.frame_id = '0'   # 정지
+            elif determined_color == 'B':
+                msg.frame_id = '-1'  # 시계 방향
+            
+            # color_state를 발행합니다.
             self.color_pub.publish(msg)
         except CvBridgeError as e:
-            self.get_logger().error('Failed to convert image: %s' % str(e))
+            self.get_logger().error('이미지 변환 실패: %s' % e)
 
-    def determine_dominant_color(self, image):
-        img_hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    def determine_color(self, img):
+        img_hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
-        # Define color ranges in HSV
-        green_mask = cv2.inRange(img_hsv, (36, 25, 25), (70, 255, 255))
-        black_mask = cv2.inRange(img_hsv, (0, 0, 0), (180, 255, 30))
+        # 기울어진 직사각형을 포함한 모든 직사각형 탐지
+        B = cv2.inRange(img_hsv, np.array([0, 0, 0]), np.array([180, 255, 50]))
+        contours, _ = cv2.findContours(B, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        green_pixels = cv2.countNonZero(green_mask)
-        black_pixels = cv2.countNonZero(black_mask)
+        # 기울어진 직사각형을 필터링합니다.
+        filtered_contours = self.filter_contours(contours)
 
-        # Determine the dominant color
-        if green_pixels > black_pixels:
-            return 'G'
-        elif black_pixels > 0:
-            return 'B'
-        else:
-            return 'None'
+        if not filtered_contours:
+            return None
+
+        CR = {'R': 0, 'G': 0, 'B': 0}
+        for contour in filtered_contours:
+            mask = np.zeros(img_hsv.shape[:2], dtype=np.uint8)
+            cv2.drawContours(mask, [contour], -1, 255, -1)
+            masked_img_hsv = cv2.bitwise_and(img_hsv, img_hsv, mask=mask)
+            
+            # 색상 영역을 정의합니다.
+            red_mask = cv2.inRange(masked_img_hsv, (0, 50, 50), (10, 255, 255)) | cv2.inRange(masked_img_hsv, (170, 50, 50), (180, 255, 255))
+            green_mask = cv2.inRange(masked_img_hsv, (50, 50, 50), (70, 255, 255))
+            blue_mask = cv2.inRange(masked_img_hsv, (110, 50, 50), (130, 255, 255))
+            
+            # 색상별 픽셀 수를 계산합니다.
+            CR['R'] += cv2.countNonZero(red_mask)
+            CR['G'] += cv2.countNonZero(green_mask)
+            CR['B'] += cv2.countNonZero(blue_mask)
+        
+        # 가장 많은 픽셀을 가진 색상을 결정합니다.
+        dominant_color = max(CR, key=CR.get)
+        return dominant_color
+
+    def filter_contours(self, contours):
+        filtered_contours = []
+        for contour in contours:
+            if cv2.contourArea(contour) > 2000:
+                rect = cv2.minAreaRect(contour)
+                box = cv2.boxPoints(rect)
+                box = np.int0(box)
+                if len(box) == 4:
+                    filtered_contours.append(contour)
+        return filtered_contours
 
 if __name__ == '__main__':
     rclpy.init()
-    detector = DetermineColor()
-    rclpy.spin(detector)
-    detector.destroy_node()
+    node = DetermineColor()
+    rclpy.spin(node)
+    node.destroy_node()
     rclpy.shutdown()
-
