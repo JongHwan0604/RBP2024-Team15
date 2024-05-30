@@ -17,81 +17,40 @@ class DetermineColor(Node):
 
     def callback(self, data):
         try:
-            # listen image topic
+            # 이미지 토픽 수신
             image = self.bridge.imgmsg_to_cv2(data, 'bgr8')
 
-            # prepare rotate_cmd msg
-            # DO NOT DELETE THE BELOW THREE LINES!
+            # rotate_cmd 메시지 준비
             msg = Header()
             msg = data.header
-            msg.frame_id = '0'  # default: STOP
-    
-            # determine background color
-            # TODO 
-            # determine the color and assing +1, 0, or, -1 for frame_id
-            # msg.frame_id = '+1' # CCW 
-            # msg.frame_id = '0'  # STOP
-            # msg.frame_id = '-1' # CW 
-            
+            msg.frame_id = '0'  # 기본값: STOP
 
+            # 배경 색상 결정
+            dominant_color = self.determine_dominant_color(image)
+            if dominant_color == 'G':
+                # 초록색이 지배색이라면, 모니터로 간주할 수 있습니다.
+                # 여기서 원하는 로직으로 처리하세요. 예시로 frame_id를 '0'으로 설정합니다.
+                msg.frame_id = '0'  # STOP
 
-    def DetermineColor(filename):
-        img_0 = cv2.imread(filename)    
-    
-    if img_0 is None:
-        return None
-
-    img_1 = cv2.cvtColor(img_0, cv2.COLOR_BGR2HSV)
-
-    B=cv2.inRange(img_1, np.array([0,0,0]), np.array([180,255,50]))
-    C,_=cv2.findContours(B, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    def filter_contours(contours):
-        filtered_contours = []
-        for contour in contours:
-            if cv2.contourArea(contour) > 2000:
-                enf = cv2.arcLength(contour, True)
-                rms = cv2.approxPolyDP(contour, 0.02*enf, True)
-            if len(rms) == 4:
-                    filtered_contours.append(contour)
-                return filtered_contours
-    
-    mps = filter_contours(C)
-        
-    if not mps:
-        return None
-
-    CR = {'R': 0, 'G': 0, 'B': 0}
-    for mp in mps:
-        mask = np.zeros(img_1.shape[:2], dtype = np.uint8)
-        cv2.drawContours(mask, [mp], -1, 255, -1)
-        mrh = cv2.bitwise_and(img_1, img_1, mask=mask)
-        
-        rm = cv2.inRange(mrh, (0, 50, 50), (10, 255, 255)) | cv2.inRange(mrh, (170, 50, 50), (180, 255, 255))
-        gm = cv2.inRange(mrh, (50, 50, 50), (70, 255, 255))
-        bm = cv2.inRange(mrh, (110, 50, 50), (130, 255, 255))
-        
-        CR['R'] += cv2.countNonZero(rm)
-        CR['G'] += cv2.countNonZero(gm)
-        CR['B'] += cv2.countNonZero(bm)
-        
-    DC = max(CR, key=CR.get)
-    return DC
-
-if __name__ == '__main__':
-    result=[]
-    for filename in sorted(glob('public_imgs/*.PNG')):
-        DC = DetermineColor(filename)
-        result.append(DC)
-    print(result)
-
-
-
-            # publish color_state
+            # color_state 발행
             self.color_pub.publish(msg)
         except CvBridgeError as e:
-            self.get_logger().error('Failed to convert image: %s' % e)
+            self.get_logger().error('이미지 변환 실패: %s' % e)
 
+    def determine_dominant_color(self, image):
+        img_hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+
+        # 초록색 필터
+        green_mask = cv2.inRange(img_hsv, (36, 25, 25), (70, 255,255))
+        green = cv2.bitwise_and(image, image, mask=green_mask)
+        green_pixels = cv2.countNonZero(green_mask)
+
+        # 여기에 다른 색상 필터를 추가할 수 있습니다.
+
+        # 지배색 결정
+        # 예시로 초록색만을 체크합니다. 필요에 따라 다른 색상도 추가하여 비교할 수 있습니다.
+        dominant_color = 'G' if green_pixels > 0 else 'None'
+        return dominant_color
 
 if __name__ == '__main__':
     rclpy.init()
