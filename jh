@@ -47,16 +47,6 @@ def determine_color_from_file(filename):
     B = cv2.inRange(img_1, np.array([0,0,0]), np.array([180,255,50]))
     C, _ = cv2.findContours(B, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    def filter_contours(contours):
-        filtered_contours = []
-        for contour in contours:
-            if cv2.contourArea(contour) > 2000:
-                enf = cv2.arcLength(contour, True)
-                rms = cv2.approxPolyDP(contour, 0.02*enf, True)
-                if len(rms) == 4:
-                    filtered_contours.append(contour)
-        return filtered_contours
-    
     mps = filter_contours(C)
         
     if not mps:
@@ -78,6 +68,22 @@ def determine_color_from_file(filename):
         
     DC = max(CR, key=CR.get)
     return DC
+
+def filter_contours(contours):
+    max_contour = None
+    max_area = -1
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        if area > max_area:
+            enf = cv2.arcLength(contour, True)
+            rms = cv2.approxPolyDP(contour, 0.02*enf, True)
+            if len(rms) == 4:  # Assuming it's a rectangle
+                max_contour = contour
+                max_area = area
+    if max_contour is not None:
+        return [max_contour]  # Return only the contour with the largest area
+    else:
+        return []
 
 if __name__ == '__main__':
     rclpy.init()
