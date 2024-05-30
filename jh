@@ -14,11 +14,19 @@ class DetermineColor(Node):
         self.bridge = CvBridge()
         self.tracker = cv2.TrackerCSRT_create()  # CSRT 트래커 생성
         self.initBB = None  # 트래킹할 객체의 초기 바운딩 박스
+        self.frame_count = 0
+        self.Rtotals = []
+        self.Gtotals = []
+        self.Btotals = []
 
     def callback(self, data):
         try:
             # 이미지 토픽 수신
             image = self.bridge.imgmsg_to_cv2(data, 'bgr8')
+
+            # 이미지 전처리
+            image = cv2.GaussianBlur(image, (5, 5), 0)  # 노이즈 제거
+            image_lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)  # LAB 색상 공간으로 변환
 
             # 회전 명령 메시지 준비
             msg = Header()
@@ -40,27 +48,41 @@ class DetermineColor(Node):
 
                 # 트래킹한 영역 내에서 색상 분석
                 roi = image[y:y+h, x:x+w]
-                hsv_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+                roi_lab = image_lab[y:y+h, x:x+w]
 
-                lower_black = np.array([0, 0, 0], dtype=np.uint8)
-                upper_black = np.array([80, 100, 100], dtype=np.uint8)
+                # 조명 조건 보정
+                roi_lab[:, :, 0] = cv2.equalizeHist(roi_lab[:, :, 0])
+                roi = cv2.cvtColor(roi_lab, cv2.COLOR_LAB2BGR)
 
-                Rtotal, Gtotal, Btotal = 0, 0, 0
+                # RGB 색상 분석
+                Rtotal = np.sum((roi[:, :, 2] > 100) & (roi[:, :, 1] < 80) & (roi[:, :, 0] < 80))
+                Gtotal = np.sum((roi[:, :, 1] > 100) & (roi[:, :, 2] < 80) & (roi[:, :, 0] < 80))
+                Btotal = np.sum((roi[:, :, 0] > 100) & (roi[:, :, 1] < 80) & (roi[:, :, 2] < 80))
 
-                mask_black = cv2.inRange(hsv_roi, lower_black, upper_black)
-                non_black_roi = cv2.bitwise_and(hsv_roi, hsv_roi, mask=~mask_black)
+                # 결과 누적
+                self.Rtotals.append(Rtotal)
+                self.Gtotals.append(Gtotal)
+                self.Btotals.append(Btotal)
+                self.frame_count += 1
 
-                Rtotal += np.sum((non_black_roi[:, :, 0] >= 0) & (non_black_roi[:, :, 0] <= 10))
-                Rtotal += np.sum((non_black_roi[:, :, 0] >= 170) & (non_black_roi[:, :, 0] <= 180))
-                Gtotal += np.sum((non_black_roi[:, :, 0] >= 50) & (non_black_roi[:, :, 0] <= 70))
-                Btotal += np.sum((non_black_roi[:, :, 0] >= 110) & (non_black_roi[:, :, 0] <= 130))
+                # 일정 프레임 수마다 평균 계산
+                if self.frame_count == 5:
+                    Ravg = np.mean(self.Rtotals)
+                    Gavg = np.mean(self.Gtotals)
+                    Bavg = np.mean(self.Btotals)
 
-                if Rtotal > Gtotal and Rtotal > Btotal:
-                    msg.frame_id = '-1'  # CW
-                elif Gtotal > Rtotal and Gtotal > Btotal:
-                    msg.frame_id = '0'  # STOP
-                else:
-                    msg.frame_id = '+1'  # CCW
+                    if Ravg > Gavg and Ravg > Bavg:
+                        msg.frame_id = '-1'  # CW
+                    elif Gavg > Ravg and Gavg > Bavg:
+                        msg.frame_id = '0'  # STOP
+                    else:
+                        msg.frame_id = '+1'  # CCW
+
+                    # 누적 초기화
+                    self.Rtotals = []
+                    self.Gtotals = []
+                    self.Btotals = []
+                    self.frame_count = 0
 
             self.color_pub.publish(msg)
 
