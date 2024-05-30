@@ -55,9 +55,9 @@ class DetermineColor(Node):
                         
                         
                         # HSV 기준에 맞는 색상만을 추출하여 픽셀 수 및 각 색상 채널별 픽셀 수 계산
-                        Rtotal += np.sum(((inner_colors[:, 0] > 170) | (inner_colors[:, 0] < 10))
-                        Gtotal += np.sum(((inner_colors[:, 0] > 50) & (inner_colors[:, 0] < 70)) 
-                        Btotal += np.sum(((inner_colors[:, 0] > 110) & (inner_colors[:, 0] < 130)) 
+                        Rtotal += np.sum(((inner_colors[:, 0] > 170) | (inner_colors[:, 0] < 10)))
+                        Gtotal += np.sum(((inner_colors[:, 0] > 50) & (inner_colors[:, 0] < 70)))
+                        Btotal += np.sum(((inner_colors[:, 0] > 110) & (inner_colors[:, 0] < 130))) 
 
 
 
